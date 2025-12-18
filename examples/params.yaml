@@ -1,0 +1,20 @@
+name: example_app
+description: Paramify C++ example
+
+parameters:
+  - name: gain
+    type: double
+    default: 1.0
+    scope: all
+    description: Gain multiplier
+
+  - name: use_camera
+    type: bool
+    default: true
+    scope: cli
+    description: Enable camera
+
+  - name: device_id
+    type: int
+    default: 0
+    # scope omitted → runtime by default
