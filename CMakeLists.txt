@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(paramify VERSION 0.1.0 LANGUAGES CXX)
+project(paramify VERSION 0.2.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
@@ -26,6 +26,7 @@ target_include_directories(paramify INTERFACE
 # yaml-cpp (required)
 find_package(yaml-cpp REQUIRED)
 target_link_libraries(paramify INTERFACE yaml-cpp)
+
 
 # CLI11 (header-only). You can remove this if you vendor CLI11 yourself.
 include(FetchContent)
@@ -58,6 +59,7 @@ endif()
 # Install headers + CMake config
 # ----------------------------
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY ${cli11_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 install(TARGETS paramify
   EXPORT paramifyTargets
