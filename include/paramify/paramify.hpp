@@ -115,7 +115,7 @@ struct ParamDef
     ValueType type;
     Scope scope = Scope::All;
     std::string description; // CLI help
-    bool has_default = false;
+    bool has_default = false; // (we keep name for minimal change; now means "has value/default")
 };
 
 struct Value
@@ -197,6 +197,7 @@ struct Value
 inline std::string kebabize(std::string x)
 {
     std::replace(x.begin(), x.end(), '_', '-');
+    std::replace(x.begin(), x.end(), '.', '-'); // NEW: support hierarchical keys
     return x;
 }
 
@@ -506,30 +507,63 @@ public:
         defs_.clear();
         values_.clear();
 
-        for (auto p : params)
+        // NEW: recursive loader to support nested groups + flat style
+        auto load_params = [&](auto &&self, const YAML::Node &seq, const std::string &prefix) -> void
         {
-            if (!p.IsMap())
-                throw ParamSchemaError("Each item in 'parameters' must be a map");
+            if (!seq || !seq.IsSequence())
+                throw ParamSchemaError("Expected 'parameters' as a sequence");
 
-            ParamDef def;
-            def.name = p["name"].as<std::string>();
-            def.type = parse_type(p["type"].as<std::string>());
-            def.scope = parse_scope(p["scope"]); // default runtime if missing
-            if (p["description"])
-                def.description = p["description"].as<std::string>();
-
-            defs_[def.name] = def;
-
-            if (p["default"])
+            for (auto p : seq)
             {
-                values_[def.name] = yaml_to_value(p["default"], def.type);
-                defs_[def.name].has_default = true;
+                if (!p.IsMap())
+                    throw ParamSchemaError("Each item in 'parameters' must be a map");
+
+                // Detect group (supports infinite nesting)
+                const bool has_child_params = static_cast<bool>(p["parameters"]);
+                const bool is_group_type = (p["type"] && p["type"].IsScalar() && p["type"].as<std::string>() == "group");
+                if (has_child_params || is_group_type)
+                {
+                    if (!p["name"])
+                        throw ParamSchemaError("Group item is missing 'name'");
+                    const std::string gname = p["name"].as<std::string>();
+                    const std::string next_prefix = prefix.empty() ? (gname + ".") : (prefix + gname + ".");
+                    YAML::Node child = p["parameters"];
+                    if (!child || !child.IsSequence())
+                        throw ParamSchemaError("Group '" + gname + "' must have 'parameters' as a sequence");
+                    self(self, child, next_prefix);
+                    continue;
+                }
+
+                // Leaf param (flat style or inside group)
+                if (!p["name"])
+                    throw ParamSchemaError("Parameter item is missing 'name'");
+                if (!p["type"])
+                    throw ParamSchemaError("Parameter '" + p["name"].as<std::string>() + "' is missing 'type'");
+
+                ParamDef def;
+                def.name = prefix + p["name"].as<std::string>();
+                def.type = parse_type(p["type"].as<std::string>());
+                def.scope = parse_scope(p["scope"]); // default runtime if missing
+                if (p["description"])
+                    def.description = p["description"].as<std::string>();
+
+                defs_[def.name] = def;
+
+                // NEW: value preferred; fallback to default for backward compatibility
+                YAML::Node val_node = p["value"] ? p["value"] : p["default"];
+                if (val_node)
+                {
+                    values_[def.name] = yaml_to_value(val_node, def.type);
+                    defs_[def.name].has_default = true;
+                }
+                else
+                {
+                    defs_[def.name].has_default = false;
+                }
             }
-            else
-            {
-                defs_[def.name].has_default = false;
-            }
-        }
+        };
+
+        load_params(load_params, params, "");
 
         yaml_loaded_ = true;
         original_root_ = root;
@@ -550,20 +584,53 @@ public:
         if (!params || !params.IsSequence())
             throw ParamSchemaError("Cannot save: 'parameters' missing or not a sequence");
 
-        for (std::size_t idx = 0; idx < params.size(); ++idx)
+        // NEW: recursive saver to support nested groups + flat style
+        auto save_params = [&](auto &&self, YAML::Node seq, const std::string &prefix) -> void
         {
-            YAML::Node p = params[idx];
-            if (!p["name"])
-                continue;
-            std::string name = p["name"].as<std::string>();
+            if (!seq || !seq.IsSequence())
+                throw ParamSchemaError("Cannot save: 'parameters' missing or not a sequence");
 
-            auto itv = values_.find(name);
-            if (itv == values_.end())
-                continue; // unset => do not write
+            for (std::size_t idx = 0; idx < seq.size(); ++idx)
+            {
+                YAML::Node p = seq[idx];
+                if (!p || !p.IsMap())
+                    continue;
 
-            p["default"] = value_to_yaml(itv->second);
-            params[idx] = p;
-        }
+                const bool has_child_params = static_cast<bool>(p["parameters"]);
+                const bool is_group_type = (p["type"] && p["type"].IsScalar() && p["type"].as<std::string>() == "group");
+
+                if (has_child_params || is_group_type)
+                {
+                    if (!p["name"])
+                        continue;
+                    const std::string gname = p["name"].as<std::string>();
+                    const std::string next_prefix = prefix.empty() ? (gname + ".") : (prefix + gname + ".");
+                    YAML::Node child = p["parameters"];
+                    if (child && child.IsSequence())
+                        self(self, child, next_prefix);
+                    seq[idx] = p;
+                    continue;
+                }
+
+                if (!p["name"])
+                    continue;
+
+                const std::string full_name = prefix + p["name"].as<std::string>();
+
+                auto itv = values_.find(full_name);
+                if (itv == values_.end())
+                    continue; // unset => do not write
+
+                // NEW: write into "value" (preferred). Also update "default" if it existed for backward-compat.
+                p["value"] = value_to_yaml(itv->second);
+                if (p["default"])
+                    p["default"] = p["value"];
+
+                seq[idx] = p;
+            }
+        };
+
+        save_params(save_params, params, "");
 
         std::ofstream f(out.c_str(), std::ios::out | std::ios::trunc);
         if (!f)
@@ -574,7 +641,7 @@ public:
     // CLI integration (CLI11)
     // --------------------------------------------------
     // Returns true  -> continue running
-    // Returns false -> help was shown OR parse error already printed (caller should exit)    
+    // Returns false -> help was shown OR parse error already printed (caller should exit)
     bool apply_cli(int argc, char **argv)
     {
         if (!options_.enable_cli)
@@ -988,8 +1055,8 @@ private:
         }
 
         throw ParamTypeError("Type mismatch for '" + key + "': schema is " +
-                            std::string(to_string(def.type)) + " but assignment is " +
-                            to_string(incoming.type));
+                             std::string(to_string(def.type)) + " but assignment is " +
+                             to_string(incoming.type));
     }
 
 private:

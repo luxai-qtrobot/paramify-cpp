@@ -67,25 +67,29 @@ cpack --config build/CPackConfig.cmake
 
 ```yaml
 name: my_app
-description: Example application
+description: Paramify C++ example
 
 parameters:
-  - name: gain
+  - name: audio_gain
     type: double
-    default: 1.0
+    value: 1.0
     scope: all
-    description: Gain multiplier
+    description: audio gain multiplier
 
-  - name: use_camera
-    type: bool
-    default: true
-    scope: cli
-    description: Enable camera
+  - name: camera 
+    type: group
+    description: Camera parameters
+    parameters:
+      - name: enabled
+        type: bool
+        value: true
+        scope: cli
+        description: Enable camera
 
-  - name: languages
-    type: list[string]
-    default: ["en", "fr"]
-    scope: all
+      - name: device_id
+        type: int
+        value: 0
+      # scope omitted → runtime by default
 ```
 
 ### Supported types

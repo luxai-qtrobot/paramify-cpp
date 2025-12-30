@@ -1,17 +1,15 @@
 #include <paramify/paramify.hpp>
 #include <iostream>
 
-int main() {
-  paramify::Paramify params("params.yaml");
+int main(int argc, char** argv) {
+  paramify::Paramify params;
 
-  double gain = params["gain"];
-  bool cam = params["use_camera"];
+  if (!params.apply_cli_or_exit(argc, argv))
+    return 0;
 
-  std::cout << "gain=" << gain
-            << " use_camera=" << cam << "\n";
-
-  params["gain"] = 2.0;
-  std::cout << "new gain=" << (double)params["gain"] << "\n";
+  std::cout << "audio_gain=" << (double)params["audio_gain"] << "\n";
+  std::cout << "camera.enabled=" << (bool)params["camera.enabled"] << "\n";
+  std::cout << "camera.device_id=" << (int64_t)params["camera.device_id"] << "\n";
 
   return 0;
 }
