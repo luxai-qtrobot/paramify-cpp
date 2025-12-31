@@ -416,6 +416,10 @@ public:
     ParamRef operator[](const std::string &key) { return ParamRef(this, key); }
     ParamRef operator[](const char *key) { return ParamRef(this, std::string(key)); }
 
+    // Const map-style
+    ParamRef operator[](const std::string &key) const { return ParamRef(const_cast<Paramify*>(this), key); }
+    ParamRef operator[](const char *key) const { return ParamRef(const_cast<Paramify*>(this), std::string(key)); }
+
     // -----------------------------
     // Programmatic schema
     // -----------------------------
