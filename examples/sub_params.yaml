@@ -1,0 +1,10 @@
+parameters:
+  - name: width
+    type: int
+    value: 800
+    scope: cli
+
+  - name: height
+    type: int
+    value: 480
+    scope: cli

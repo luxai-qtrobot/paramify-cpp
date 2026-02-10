@@ -10,6 +10,7 @@ int main(int argc, char** argv) {
   std::cout << "audio_gain=" << (double)params["audio_gain"] << "\n";
   std::cout << "camera.enabled=" << (bool)params["camera.enabled"] << "\n";
   std::cout << "camera.device_id=" << (int64_t)params["camera.device_id"] << "\n";
+  std::cout << "display.width=" << (int64_t)params["display.width"] << "\n";
 
   return 0;
 }

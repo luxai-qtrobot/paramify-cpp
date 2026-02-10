@@ -12,6 +12,7 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <set>
 
 // yaml-cpp
 #include <yaml-cpp/yaml.h>
@@ -348,6 +349,23 @@ inline YAML::Node value_to_yaml(const Value &v)
     return n;
 }
 
+// path helpers (relative only)
+inline std::string dirname(const std::string& path)
+{
+    auto pos = path.find_last_of("/\\");
+    return (pos == std::string::npos) ? std::string() : path.substr(0, pos);
+}
+
+inline std::string join_path(const std::string& base, const std::string& rel)
+{
+    if (rel.empty())
+        return base;
+    if (base.empty())
+        return rel;
+    return base + "/" + rel;
+}
+
+
 // -----------------------------
 // Forward decl
 // -----------------------------
@@ -512,33 +530,135 @@ public:
         values_.clear();
 
         // NEW: recursive loader to support nested groups + flat style
-        auto load_params = [&](auto &&self, const YAML::Node &seq, const std::string &prefix) -> void
+        // auto load_params = [&](auto &&self, const YAML::Node &seq, const std::string &prefix) -> void
+        // {
+        //     if (!seq || !seq.IsSequence())
+        //         throw ParamSchemaError("Expected 'parameters' as a sequence");
+
+        //     for (auto p : seq)
+        //     {
+        //         if (!p.IsMap())
+        //             throw ParamSchemaError("Each item in 'parameters' must be a map");
+
+        //         // Detect group (supports infinite nesting)
+        //         const bool has_child_params = static_cast<bool>(p["parameters"]);
+        //         const bool is_group_type = (p["type"] && p["type"].IsScalar() && p["type"].as<std::string>() == "group");
+        //         if (has_child_params || is_group_type)
+        //         {
+        //             if (!p["name"])
+        //                 throw ParamSchemaError("Group item is missing 'name'");
+        //             const std::string gname = p["name"].as<std::string>();
+        //             const std::string next_prefix = prefix.empty() ? (gname + ".") : (prefix + gname + ".");
+        //             YAML::Node child = p["parameters"];
+        //             if (!child || !child.IsSequence())
+        //                 throw ParamSchemaError("Group '" + gname + "' must have 'parameters' as a sequence");
+        //             self(self, child, next_prefix);
+        //             continue;
+        //         }
+
+        //         // Leaf param (flat style or inside group)
+        //         if (!p["name"])
+        //             throw ParamSchemaError("Parameter item is missing 'name'");
+        //         if (!p["type"])
+        //             throw ParamSchemaError("Parameter '" + p["name"].as<std::string>() + "' is missing 'type'");
+
+        //         ParamDef def;
+        //         def.name = prefix + p["name"].as<std::string>();
+        //         def.type = parse_type(p["type"].as<std::string>());
+        //         def.scope = parse_scope(p["scope"]); // default runtime if missing
+        //         if (p["description"])
+        //             def.description = p["description"].as<std::string>();
+
+        //         defs_[def.name] = def;
+
+        //         // NEW: value preferred; fallback to default for backward compatibility
+        //         YAML::Node val_node = p["value"] ? p["value"] : p["default"];
+        //         if (val_node)
+        //         {
+        //             values_[def.name] = yaml_to_value(val_node, def.type);
+        //             defs_[def.name].has_default = true;
+        //         }
+        //         else
+        //         {
+        //             defs_[def.name].has_default = false;
+        //         }
+        //     }
+        // };
+
+        std::set<std::string> include_stack;
+        auto load_params = [&](auto &&self,
+                            const YAML::Node &seq,
+                            const std::string &prefix,
+                            const std::string &base_dir) -> void
         {
             if (!seq || !seq.IsSequence())
                 throw ParamSchemaError("Expected 'parameters' as a sequence");
 
-            for (auto p : seq)
-            {
+            for (auto p : seq) {
                 if (!p.IsMap())
                     throw ParamSchemaError("Each item in 'parameters' must be a map");
 
-                // Detect group (supports infinite nesting)
-                const bool has_child_params = static_cast<bool>(p["parameters"]);
-                const bool is_group_type = (p["type"] && p["type"].IsScalar() && p["type"].as<std::string>() == "group");
-                if (has_child_params || is_group_type)
-                {
+                // Detect group
+                const bool is_group_type =
+                    (p["type"] && p["type"].IsScalar() && p["type"].as<std::string>() == "group");
+
+                if (is_group_type) {
                     if (!p["name"])
                         throw ParamSchemaError("Group item is missing 'name'");
+
                     const std::string gname = p["name"].as<std::string>();
-                    const std::string next_prefix = prefix.empty() ? (gname + ".") : (prefix + gname + ".");
-                    YAML::Node child = p["parameters"];
-                    if (!child || !child.IsSequence())
-                        throw ParamSchemaError("Group '" + gname + "' must have 'parameters' as a sequence");
-                    self(self, child, next_prefix);
+                    const std::string next_prefix =
+                        prefix.empty() ? (gname + ".") : (prefix + gname + ".");
+
+                    // ---- NEW: handle include (string or list)
+                    if (p["include"]) {
+                        YAML::Node inc = p["include"];
+                        std::vector<std::string> files;
+
+                        if (inc.IsScalar())
+                            files.push_back(inc.as<std::string>());
+                        else if (inc.IsSequence())
+                            for (auto x : inc)
+                                files.push_back(x.as<std::string>());
+                        else
+                            throw ParamSchemaError("'include' must be string or list");
+
+                        for (const auto &rel_path : files)
+                        {
+                            if (!rel_path.empty() && rel_path[0] == '/')
+                                throw ParamSchemaError("Absolute paths not allowed in include: " + rel_path);
+
+                            const std::string full =
+                                join_path(base_dir, rel_path);
+
+                            if (!include_stack.insert(full).second)
+                                throw ParamSchemaError("Circular include detected: " + full);
+
+                            YAML::Node inc_root = YAML::LoadFile(full);
+                            YAML::Node inc_params = inc_root["parameters"];
+                            if (!inc_params || !inc_params.IsSequence())
+                                throw ParamSchemaError("Included file must contain 'parameters'");
+
+                            self(self,
+                                inc_params,
+                                next_prefix,
+                                dirname(full));
+
+                            include_stack.erase(full);
+                        }
+                    }
+
+                    // Inline parameters still allowed and override includes
+                    if (p["parameters"]) {
+                        self(self,
+                            p["parameters"],
+                            next_prefix,
+                            base_dir);
+                    }
                     continue;
                 }
 
-                // Leaf param (flat style or inside group)
+                // ---- Leaf parameter (unchanged)
                 if (!p["name"])
                     throw ParamSchemaError("Parameter item is missing 'name'");
                 if (!p["type"])
@@ -547,27 +667,22 @@ public:
                 ParamDef def;
                 def.name = prefix + p["name"].as<std::string>();
                 def.type = parse_type(p["type"].as<std::string>());
-                def.scope = parse_scope(p["scope"]); // default runtime if missing
+                def.scope = parse_scope(p["scope"]);
                 if (p["description"])
                     def.description = p["description"].as<std::string>();
 
                 defs_[def.name] = def;
 
-                // NEW: value preferred; fallback to default for backward compatibility
                 YAML::Node val_node = p["value"] ? p["value"] : p["default"];
-                if (val_node)
-                {
+                if (val_node) {
                     values_[def.name] = yaml_to_value(val_node, def.type);
                     defs_[def.name].has_default = true;
                 }
-                else
-                {
-                    defs_[def.name].has_default = false;
-                }
+                else { defs_[def.name].has_default = false; }
             }
-        };
+        };   
 
-        load_params(load_params, params, "");
+        load_params(load_params, params, "", dirname(file_path_));
 
         yaml_loaded_ = true;
         original_root_ = root;

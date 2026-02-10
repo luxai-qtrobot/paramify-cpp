@@ -7,7 +7,6 @@ It is designed for applications and libraries that need:
 - CLI overrides
 - runtime parameter access
 - minimal dependencies
-- no code generation, no Boost
 
 This project is the C++ counterpart of the original Python **Paramify** library.
 
@@ -18,7 +17,7 @@ This project is the C++ counterpart of the original Python **Paramify** library.
 - ✅ YAML-based parameter definitions
 - ✅ Programmatic (code-defined) parameters
 - ✅ Automatic CLI generation (`--help`, `--config`, flags)
-- ✅ True *map-style* API  
+
   ```cpp
   double g = params["gain"];
   params["gain"] = 2.5;
@@ -90,6 +89,10 @@ parameters:
         type: int
         value: 0
       # scope omitted → runtime by default
+  - name: display 
+    type: group
+    description: display parameters
+    include: sub_params.yaml      
 ```
 
 ### Supported types
