@@ -117,6 +117,7 @@ struct ParamDef
     Scope scope = Scope::All;
     std::string description; // CLI help
     bool has_default = false; // (we keep name for minimal change; now means "has value/default")
+    std::string source_file; // NEW: track which file this param came from
 };
 
 struct Value
@@ -528,68 +529,16 @@ public:
 
         defs_.clear();
         values_.clear();
-
-        // NEW: recursive loader to support nested groups + flat style
-        // auto load_params = [&](auto &&self, const YAML::Node &seq, const std::string &prefix) -> void
-        // {
-        //     if (!seq || !seq.IsSequence())
-        //         throw ParamSchemaError("Expected 'parameters' as a sequence");
-
-        //     for (auto p : seq)
-        //     {
-        //         if (!p.IsMap())
-        //             throw ParamSchemaError("Each item in 'parameters' must be a map");
-
-        //         // Detect group (supports infinite nesting)
-        //         const bool has_child_params = static_cast<bool>(p["parameters"]);
-        //         const bool is_group_type = (p["type"] && p["type"].IsScalar() && p["type"].as<std::string>() == "group");
-        //         if (has_child_params || is_group_type)
-        //         {
-        //             if (!p["name"])
-        //                 throw ParamSchemaError("Group item is missing 'name'");
-        //             const std::string gname = p["name"].as<std::string>();
-        //             const std::string next_prefix = prefix.empty() ? (gname + ".") : (prefix + gname + ".");
-        //             YAML::Node child = p["parameters"];
-        //             if (!child || !child.IsSequence())
-        //                 throw ParamSchemaError("Group '" + gname + "' must have 'parameters' as a sequence");
-        //             self(self, child, next_prefix);
-        //             continue;
-        //         }
-
-        //         // Leaf param (flat style or inside group)
-        //         if (!p["name"])
-        //             throw ParamSchemaError("Parameter item is missing 'name'");
-        //         if (!p["type"])
-        //             throw ParamSchemaError("Parameter '" + p["name"].as<std::string>() + "' is missing 'type'");
-
-        //         ParamDef def;
-        //         def.name = prefix + p["name"].as<std::string>();
-        //         def.type = parse_type(p["type"].as<std::string>());
-        //         def.scope = parse_scope(p["scope"]); // default runtime if missing
-        //         if (p["description"])
-        //             def.description = p["description"].as<std::string>();
-
-        //         defs_[def.name] = def;
-
-        //         // NEW: value preferred; fallback to default for backward compatibility
-        //         YAML::Node val_node = p["value"] ? p["value"] : p["default"];
-        //         if (val_node)
-        //         {
-        //             values_[def.name] = yaml_to_value(val_node, def.type);
-        //             defs_[def.name].has_default = true;
-        //         }
-        //         else
-        //         {
-        //             defs_[def.name].has_default = false;
-        //         }
-        //     }
-        // };
+        file_roots_.clear(); // NEW: clear file roots
+        file_prefixes_.clear(); 
+        modified_keys_.clear(); // NEW: clear modifications
 
         std::set<std::string> include_stack;
         auto load_params = [&](auto &&self,
                             const YAML::Node &seq,
                             const std::string &prefix,
-                            const std::string &base_dir) -> void
+                            const std::string &base_dir,
+                            const std::string &current_file) -> void // NEW: added current_file parameter
         {
             if (!seq || !seq.IsSequence())
                 throw ParamSchemaError("Expected 'parameters' as a sequence");
@@ -635,6 +584,8 @@ public:
                                 throw ParamSchemaError("Circular include detected: " + full);
 
                             YAML::Node inc_root = YAML::LoadFile(full);
+                            file_roots_[full] = inc_root; // NEW: store the included file's YAML structure
+                            file_prefixes_[full] = next_prefix; // ADD THIS LINE
                             YAML::Node inc_params = inc_root["parameters"];
                             if (!inc_params || !inc_params.IsSequence())
                                 throw ParamSchemaError("Included file must contain 'parameters'");
@@ -642,7 +593,8 @@ public:
                             self(self,
                                 inc_params,
                                 next_prefix,
-                                dirname(full));
+                                dirname(full),
+                                full); // NEW: pass the included file path
 
                             include_stack.erase(full);
                         }
@@ -653,7 +605,8 @@ public:
                         self(self,
                             p["parameters"],
                             next_prefix,
-                            base_dir);
+                            base_dir,
+                            current_file); // NEW: pass current file
                     }
                     continue;
                 }
@@ -670,6 +623,7 @@ public:
                 def.scope = parse_scope(p["scope"]);
                 if (p["description"])
                     def.description = p["description"].as<std::string>();
+                def.source_file = current_file; // NEW: track source file
 
                 defs_[def.name] = def;
 
@@ -682,16 +636,67 @@ public:
             }
         };   
 
-        load_params(load_params, params, "", dirname(file_path_));
+        file_roots_[file_path_] = root; // NEW: store the root file's YAML structure
+        file_prefixes_[file_path_] = "";
+        load_params(load_params, params, "", dirname(file_path_), file_path_); // NEW: pass file_path_ as current_file
 
         yaml_loaded_ = true;
         original_root_ = root;
     }
 
     // -----------------------------
-    // Save (optional)
+    // Save (NEW: multi-file save based on modifications)
     // -----------------------------
-    void save_to_file(const std::string &yaml_path = "") const
+    void save() const
+    {
+        if (file_path_.empty())
+            throw ParamError("No file path set for save");
+
+        // Group modified keys by source file
+        std::unordered_map<std::string, std::vector<std::string>> modified_by_file;
+        for (const auto &key : modified_keys_)
+        {
+            auto it = defs_.find(key);
+            if (it != defs_.end())
+            {
+                const std::string &src = it->second.source_file;
+                modified_by_file[src].push_back(key);
+            }
+        }
+
+        // Save each file that has modifications
+        for (const auto &kv : modified_by_file)
+        {
+            const std::string &file = kv.first;
+            const auto &keys = kv.second;
+
+            auto root_it = file_roots_.find(file);
+            if (root_it == file_roots_.end())
+                continue; // skip if we don't have the YAML structure
+
+            YAML::Node root = root_it->second;
+            YAML::Node params = root["parameters"];
+            if (!params || !params.IsSequence())
+                continue;
+
+            // Update all parameters in this file            
+            // std::string prefix = file_prefixes_.count(file) ? file_prefixes_[file] : "";
+            auto it = file_prefixes_.find(file);
+            std::string prefix = (it != file_prefixes_.end()) ? it->second : "";            
+            update_yaml_params(params, keys, prefix);
+
+            // Write to file
+            std::ofstream f(file.c_str(), std::ios::out | std::ios::trunc);
+            if (!f)
+                throw ParamError("Failed to open for write: " + file);
+            f << root;
+        }
+    }
+
+    // -----------------------------
+    // Save (flatten all params to single file)
+    // -----------------------------
+    void save_as(const std::string &yaml_path = "") const
     {
         std::string out = yaml_path.empty() ? file_path_ : yaml_path;
         if (out.empty())
@@ -1164,18 +1169,70 @@ private:
         if (incoming.type == def.type)
         {
             values_[key] = incoming;
+            modified_keys_.insert(key); // NEW: track modification
             return;
         }
 
         if (allow_int_to_double && def.type == ValueType::Double && incoming.type == ValueType::Int)
         {
             values_[key] = Value::make_double(static_cast<double>(incoming.i));
+            modified_keys_.insert(key); // NEW: track modification
             return;
         }
 
         throw ParamTypeError("Type mismatch for '" + key + "': schema is " +
                              std::string(to_string(def.type)) + " but assignment is " +
                              to_string(incoming.type));
+    }
+
+    // NEW: Helper to recursively update YAML params
+    void update_yaml_params(YAML::Node seq, const std::vector<std::string> &keys, const std::string &prefix) const
+    {
+        if (!seq || !seq.IsSequence())
+            return;
+
+        for (std::size_t idx = 0; idx < seq.size(); ++idx)
+        {
+            YAML::Node p = seq[idx];
+            if (!p || !p.IsMap())
+                continue;
+
+            const bool has_child_params = static_cast<bool>(p["parameters"]);
+            const bool is_group_type = (p["type"] && p["type"].IsScalar() && p["type"].as<std::string>() == "group");
+
+            if (has_child_params || is_group_type)
+            {
+                if (!p["name"])
+                    continue;
+                const std::string gname = p["name"].as<std::string>();
+                const std::string next_prefix = prefix.empty() ? (gname + ".") : (prefix + gname + ".");
+                YAML::Node child = p["parameters"];
+                if (child && child.IsSequence())
+                    update_yaml_params(child, keys, next_prefix);
+                seq[idx] = p;
+                continue;
+            }
+
+            if (!p["name"])
+                continue;
+
+            const std::string full_name = prefix + p["name"].as<std::string>();
+
+            // Check if this parameter was modified
+            if (std::find(keys.begin(), keys.end(), full_name) == keys.end())
+                continue;
+
+            auto itv = values_.find(full_name);
+            if (itv == values_.end())
+                continue;
+
+            // Update the value
+            p["value"] = value_to_yaml(itv->second);
+            if (p["default"])
+                p["default"] = p["value"];
+
+            seq[idx] = p;
+        }
     }
 
 private:
@@ -1190,6 +1247,10 @@ private:
 
     std::string app_name_;
     std::string app_description_;
+
+    std::set<std::string> modified_keys_; // NEW: track modified parameters
+    std::unordered_map<std::string, YAML::Node> file_roots_; // NEW: store YAML structure for each file
+    std::unordered_map<std::string, std::string> file_prefixes_; // ADD THIS LINE
 };
 
 // -----------------------------

@@ -12,5 +12,10 @@ int main(int argc, char** argv) {
   std::cout << "camera.device_id=" << (int64_t)params["camera.device_id"] << "\n";
   std::cout << "display.width=" << (int64_t)params["display.width"] << "\n";
 
+  // params.set_int("display.width", 1200);
+  // params["display.width"] = 1200;
+  // std::cout << "display.width=" << (int64_t)params["display.width"] << "\n";
+  // params.save();
+
   return 0;
 }
