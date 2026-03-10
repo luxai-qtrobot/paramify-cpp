@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(paramify VERSION 0.4.2 LANGUAGES CXX)
+project(paramify VERSION 0.4.3 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
@@ -140,7 +140,7 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 set(CPACK_DEBIAN_CORE_PACKAGE_SHLIBDEPS ON)
 
 # Runtime deps (best-effort). Adjust names per distro if needed.
-# On Ubuntu/Debian yaml-cpp runtime package is typically libyaml-cpp0.6 (version may vary).
-set(CPACK_DEBIAN_CORE_PACKAGE_DEPENDS "libyaml-cpp0.6 | libyaml-cpp0.8")
+# yaml-cpp runtime package name varies by distro: 0.6 (focal), 0.7 (jammy/22.04), 0.8 (noble/24.04)
+set(CPACK_DEBIAN_CORE_PACKAGE_DEPENDS "libyaml-cpp0.6 | libyaml-cpp0.7 | libyaml-cpp0.8")
 
 include(CPack)
