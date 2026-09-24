@@ -60,6 +60,16 @@ endif()
 # ----------------------------
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT core)
 install(DIRECTORY ${cli11_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT core)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/libparamify-dev
+  RENAME paramify-LICENSE
+  COMPONENT core
+)
+install(FILES ${cli11_SOURCE_DIR}/LICENSE
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/libparamify-dev
+  RENAME CLI11-LICENSE
+  COMPONENT core
+)
 
 install(TARGETS paramify
   EXPORT paramifyTargets
